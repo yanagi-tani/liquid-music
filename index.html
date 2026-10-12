@@ -1,0 +1,1154 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LIQUID MUSIC</title>
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #e8e5df;
+  font-family: Arial, sans-serif;
+}
+
+canvas {
+  position: fixed;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+h1 {
+  position: fixed;
+  top: 30px;
+  left: 40px;
+  z-index: 10;
+  margin: 0;
+  font-size: clamp(22px, 3vw, 38px);
+  font-weight: 600;
+  letter-spacing: -0.05em;
+}
+
+.controls {
+  position: fixed;
+  bottom: 35px;
+  left: 40px;
+  z-index: 10;
+  display: flex;
+  gap: 10px;
+}
+
+.controls button,
+.file-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #555;
+  border-radius: 50%;
+  background: transparent;
+  color: #111;
+  font-size: 17px;
+  cursor: pointer;
+}
+
+.controls button:hover,
+.file-button:hover,
+.controls button.active {
+  background: #111;
+  color: white;
+}
+
+#file {
+  display: none;
+}
+
+.modes {
+  position: fixed;
+  right: 40px;
+  bottom: 45px;
+  z-index: 10;
+  display: flex;
+  gap: 18px;
+}
+
+.modes button {
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: #999;
+  cursor: pointer;
+}
+
+.modes button.active {
+  color: #111;
+  border-bottom-color: #111;
+}
+
+@media (max-width: 600px) {
+  h1 {
+    top: 25px;
+    left: 24px;
+  }
+
+  .controls {
+    bottom: 25px;
+    left: 24px;
+    gap: 6px;
+  }
+
+  .controls button,
+  .file-button {
+    width: 35px;
+    height: 35px;
+  }
+
+  .modes {
+    right: 24px;
+    bottom: 35px;
+    gap: 8px;
+  }
+}
+</style>
+</head>
+
+<body>
+
+<h1>LIQUID MUSIC</h1>
+
+<canvas id="canvas"></canvas>
+
+<div class="controls">
+  <button id="capture" title="タブ音声を取得">◉</button>
+
+  <label for="file" class="file-button" title="音楽ファイルを選択">＋</label>
+  <input type="file" id="file" accept="audio/*">
+
+  <button id="stop" title="停止">■</button>
+  <button id="auto" title="自動モード">A</button>
+</div>
+
+<div class="modes">
+  <button class="active" data-mode="0">01</button>
+  <button data-mode="1">02</button>
+  <button data-mode="2">03</button>
+  <button data-mode="3">04</button>
+  <button data-mode="4">05</button>
+</div>
+
+<script>
+"use strict";
+
+// =====================================
+// CANVAS
+// =====================================
+
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+const TAU = Math.PI * 2;
+const POINTS = 220;
+
+let W = 0;
+let H = 0;
+let cx = 0;
+let cy = 0;
+let baseRadius = 100;
+
+let time = 0;
+let frame = 0;
+
+let mode = 0;
+let autoMode = false;
+let lastModeChange = 0;
+
+// =====================================
+// AUDIO
+// =====================================
+
+let audioContext = null;
+let analyser = null;
+let frequencyData = null;
+let previousSpectrum = null;
+
+let audioSource = null;
+let audioStream = null;
+let audioPlayer = null;
+let audioURL = null;
+let outputGain = null;
+
+let bass = 0.03;
+let mid = 0.02;
+let treble = 0.01;
+let volume = 0;
+
+let previousBass = 0;
+let previousMid = 0;
+let previousTreble = 0;
+
+let bassAttack = 0;
+let midAttack = 0;
+let highAttack = 0;
+let spectralFlux = 0;
+
+let beatPulse = 0;
+let highPulse = 0;
+let amplified = 0;
+
+const sensitivity = 7;
+
+// =====================================
+// FLUID
+// =====================================
+
+let fluid = [];
+let particles = [];
+let blobs = [];
+let ripples = [];
+let sparks = [];
+
+let lastBurst = -100;
+let lastRipple = -100;
+
+// =====================================
+// UTILITIES
+// =====================================
+
+function clamp(v, a, b) {
+  return Math.max(a, Math.min(b, v));
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function random(a, b) {
+  return a + Math.random() * (b - a);
+}
+
+function smoothNoise(x, y, z) {
+  return (
+    Math.sin(x * 1.71 + z * 0.87) *
+    Math.cos(y * 1.43 - z * 0.63) * 0.28 +
+
+    Math.sin(x * 2.39 - y * 1.12 + z * 1.21) * 0.14 +
+
+    Math.cos(x * 0.83 + y * 2.07 - z * 0.41) * 0.08
+  );
+}
+
+// =====================================
+// RESIZE
+// =====================================
+
+function resize() {
+  const oldRadius = baseRadius;
+
+  W = window.innerWidth;
+  H = window.innerHeight;
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  cx = W / 2;
+  cy = H / 2;
+
+  baseRadius = Math.min(W, H) * 0.21;
+
+  if (fluid.length === 0) {
+    for (let i = 0; i < POINTS; i++) {
+      fluid.push({
+        radius: baseRadius,
+        velocity: 0
+      });
+    }
+  } else {
+    const ratio = baseRadius / oldRadius;
+
+    for (const p of fluid) {
+      p.radius *= ratio;
+    }
+  }
+
+  ctx.fillStyle = "#e8e5df";
+  ctx.fillRect(0, 0, W, H);
+}
+
+window.addEventListener("resize", resize);
+
+// =====================================
+// AUDIO ANALYSIS
+// =====================================
+
+function updateAudio() {
+  if (!analyser || !audioSource) {
+    bass = lerp(bass, 0.03, 0.08);
+    mid = lerp(mid, 0.02, 0.08);
+    treble = lerp(treble, 0.01, 0.08);
+    volume = lerp(volume, 0, 0.08);
+
+    bassAttack = 0;
+    midAttack = 0;
+    highAttack = 0;
+    spectralFlux = 0;
+    amplified = 0;
+
+    return;
+  }
+
+  analyser.getByteFrequencyData(frequencyData);
+
+  let low = 0;
+  let middle = 0;
+  let high = 0;
+
+  let lc = 0;
+  let mc = 0;
+  let hc = 0;
+
+  let flux = 0;
+
+  const binHz = audioContext.sampleRate / analyser.fftSize;
+
+  for (let i = 1; i < frequencyData.length; i++) {
+    const hz = i * binHz;
+
+    if (hz > 12000) break;
+
+    const value = frequencyData[i] / 255;
+
+    if (hz < 180) {
+      low += value;
+      lc++;
+    } else if (hz < 2500) {
+      middle += value;
+      mc++;
+    } else {
+      high += value;
+      hc++;
+    }
+
+    const difference = value - previousSpectrum[i];
+
+    if (difference > 0) {
+      flux += difference;
+    }
+
+    previousSpectrum[i] = value;
+  }
+
+  const rawBass = low / Math.max(1, lc);
+  const rawMid = middle / Math.max(1, mc);
+  const rawHigh = high / Math.max(1, hc);
+
+  bass = lerp(bass, rawBass, 0.45);
+  mid = lerp(mid, rawMid, 0.45);
+  treble = lerp(treble, rawHigh, 0.5);
+
+  volume =
+    bass * 0.4 +
+    mid * 0.3 +
+    treble * 0.3;
+
+  bassAttack = Math.max(0, bass - previousBass);
+  midAttack = Math.max(0, mid - previousMid);
+  highAttack = Math.max(0, treble - previousTreble);
+
+  spectralFlux = flux / Math.max(1, lc + mc + hc);
+
+  previousBass = bass;
+  previousMid = mid;
+  previousTreble = treble;
+
+  const reaction =
+    bassAttack * 2 +
+    midAttack * 1.5 +
+    highAttack * 2.5 +
+    spectralFlux * 3;
+
+  amplified = reaction * sensitivity;
+}
+
+// =====================================
+// FLUID PHYSICS
+// =====================================
+
+function updateFluid() {
+  time +=
+    0.007 +
+    volume * 0.04 +
+    amplified * 0.008;
+
+  if (audioSource && amplified > 0.025) {
+    // V4の鼓動量
+    beatPulse = Math.max(
+      beatPulse,
+      Math.min(1.8, amplified * 1.5)
+    );
+
+    highPulse = Math.max(
+      highPulse,
+      Math.min(1.5, highAttack * sensitivity * 5)
+    );
+
+    emitParticles(amplified);
+
+    if (
+      amplified > 0.25 &&
+      frame - lastBurst > 10
+    ) {
+      createBurst(clamp(amplified, 0.3, 1.8));
+      lastBurst = frame;
+    }
+
+    // V4の波紋量
+    if (
+      amplified > 0.12 &&
+      frame - lastRipple > 8
+    ) {
+      createRipple(amplified);
+      lastRipple = frame;
+    }
+  }
+
+  beatPulse *= 0.84;
+  highPulse *= 0.75;
+
+  const targets = [];
+  const velocities = [];
+
+  for (let i = 0; i < POINTS; i++) {
+    const a = i / POINTS * TAU;
+
+    const n1 = smoothNoise(
+      Math.cos(a) * 1.2 + 10,
+      Math.sin(a) * 1.2 + 10,
+      time * 0.6
+    );
+
+    const n2 = smoothNoise(
+      Math.cos(a) * 2.7 + 30,
+      Math.sin(a) * 2.7 + 30,
+      time
+    );
+
+    const n3 = smoothNoise(
+      Math.cos(a) * 5 + 60,
+      Math.sin(a) * 5 + 60,
+      time * 1.3
+    );
+
+    let deformation =
+      n1 * baseRadius * 0.42 +
+      n2 * baseRadius * 0.17 +
+      n3 * baseRadius * 0.06 * (1 + highPulse * 2);
+
+    let expansion =
+      bass * baseRadius * 0.24 +
+      beatPulse * baseRadius * 0.16;
+
+    // BREATH
+    if (mode === 1) {
+      const wave =
+        Math.sin(time * 2.1 + a * 2) * 0.045 +
+        Math.sin(time * 1.2 - a * 3) * 0.025;
+
+      deformation += wave * baseRadius;
+
+      expansion +=
+        baseRadius * (0.025 + 0.055 * beatPulse);
+    }
+
+    // ORBIT
+    if (mode === 2) {
+      deformation +=
+        Math.sin(a * 3 - time * 3) *
+        baseRadius * 0.07;
+    }
+
+    // FRAGMENT
+    if (mode === 3) {
+      deformation +=
+        n2 * baseRadius * 0.13;
+    }
+
+    // DISSOLVE
+    if (mode === 4) {
+      deformation +=
+        n3 * baseRadius * 0.10;
+    }
+
+    targets[i] =
+      baseRadius + deformation + expansion;
+  }
+
+  for (let i = 0; i < POINTS; i++) {
+    const p = fluid[i];
+
+    const left = fluid[(i - 1 + POINTS) % POINTS];
+    const right = fluid[(i + 1) % POINTS];
+
+    const left3 = fluid[(i - 3 + POINTS) % POINTS];
+    const right3 = fluid[(i + 3) % POINTS];
+
+    const tension =
+      (left.radius + right.radius - 2 * p.radius) * 0.25 +
+      (left3.radius + right3.radius - 2 * p.radius) * 0.04;
+
+    const spring =
+      (targets[i] - p.radius) * 0.045;
+
+    velocities[i] =
+      (p.velocity + spring + tension) * 0.87;
+  }
+
+  for (let i = 0; i < POINTS; i++) {
+    fluid[i].velocity = velocities[i];
+
+    fluid[i].radius = clamp(
+      fluid[i].radius + velocities[i],
+      baseRadius * 0.5,
+      baseRadius * 1.9
+    );
+  }
+}
+
+// =====================================
+// PARTICLES
+// =====================================
+
+function getFluidRadius(angle) {
+  const a = ((angle % TAU) + TAU) % TAU;
+
+  const f = a / TAU * POINTS;
+  const i = Math.floor(f);
+
+  return lerp(
+    fluid[i % POINTS].radius,
+    fluid[(i + 1) % POINTS].radius,
+    f - i
+  );
+}
+
+function spawnParticle(x, y, vx, vy, radius, life) {
+  if (particles.length >= 2400) {
+    particles.splice(0, 100);
+  }
+
+  particles.push({
+    x, y, vx, vy,
+    radius,
+    life,
+    maxLife: life,
+    seed: Math.random() * 1000
+  });
+}
+
+function emitParticles(power) {
+  const count = Math.floor(clamp(power * 22, 1, 28));
+
+  for (let i = 0; i < count; i++) {
+    const a = random(0, TAU);
+    const r = getFluidRadius(a);
+    const speed = random(0.5, 2.2) + power * 2;
+
+    spawnParticle(
+      cx + Math.cos(a) * r,
+      cy + Math.sin(a) * r,
+      Math.cos(a) * speed + random(-0.5, 0.5),
+      Math.sin(a) * speed + random(-0.5, 0.5),
+      random(0.6, 2.8),
+      random(70, 150)
+    );
+  }
+}
+
+function createBurst(power) {
+  const direction = random(0, TAU);
+  const radius = getFluidRadius(direction);
+
+  blobs.push({
+    x: cx + Math.cos(direction) * radius,
+    y: cy + Math.sin(direction) * radius,
+    vx: Math.cos(direction) * (2 + power * 5),
+    vy: Math.sin(direction) * (2 + power * 5),
+    radius: random(8, 18),
+    life: 100,
+    maxLife: 100
+  });
+
+  const count = Math.floor(40 + power * 110);
+
+  for (let i = 0; i < count; i++) {
+    const a = direction + random(-0.5, 0.5);
+    const r = getFluidRadius(a);
+    const speed = random(1, 5) * (1 + power);
+
+    spawnParticle(
+      cx + Math.cos(a) * r,
+      cy + Math.sin(a) * r,
+      Math.cos(a) * speed,
+      Math.sin(a) * speed,
+      random(1, 5),
+      random(80, 170)
+    );
+  }
+
+  for (let i = 0; i < POINTS; i++) {
+    const a = i / POINTS * TAU;
+
+    const diff = Math.atan2(
+      Math.sin(a - direction),
+      Math.cos(a - direction)
+    );
+
+    fluid[i].velocity -=
+      power * 14 *
+      Math.exp(
+        -diff * diff / (2 * 0.16 * 0.16)
+      );
+  }
+
+  for (let i = 0; i < 25; i++) {
+    const a = direction + random(-0.7, 0.7);
+    const speed = random(2, 7);
+
+    sparks.push({
+      x: cx + Math.cos(direction) * radius,
+      y: cy + Math.sin(direction) * radius,
+      vx: Math.cos(a) * speed,
+      vy: Math.sin(a) * speed,
+      life: random(12, 35),
+      maxLife: 35
+    });
+  }
+
+  if (mode === 3) {
+    for (let i = 0; i < 3; i++) {
+      blobs.push({
+        x: cx + Math.cos(direction) * radius,
+        y: cy + Math.sin(direction) * radius,
+        vx: random(-5, 5),
+        vy: random(-5, 5),
+        radius: random(5, 13),
+        life: 110,
+        maxLife: 110
+      });
+    }
+  }
+
+  if (sparks.length > 400) {
+    sparks.splice(0, sparks.length - 400);
+  }
+}
+
+function createRipple(power) {
+  ripples.push({
+    radius: baseRadius * 0.8,
+    speed: 3 + power * 5,
+    life: 45,
+    maxLife: 45,
+    strength: power
+  });
+
+  if (ripples.length > 15) {
+    ripples.shift();
+  }
+}
+
+function updateEffects() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+
+    p.vx *= 0.958;
+    p.vy *= 0.958;
+
+    p.vx +=
+      smoothNoise(p.seed, p.x * 0.003, time * 0.4) *
+      0.075;
+
+    p.vy +=
+      smoothNoise(p.seed + 100, p.y * 0.003, time * 0.4) *
+      0.075;
+
+    if (mode === 2) {
+      const dx = p.x - cx;
+      const dy = p.y - cy;
+      const d = Math.max(1, Math.hypot(dx, dy));
+
+      p.vx += -dy / d * 0.095;
+      p.vy += dx / d * 0.095;
+    }
+
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life--;
+
+    if (p.life <= 0) {
+      particles.splice(i, 1);
+    }
+  }
+
+  for (let i = blobs.length - 1; i >= 0; i--) {
+    const b = blobs[i];
+
+    b.vx *= 0.96;
+    b.vy *= 0.96;
+
+    b.x += b.vx;
+    b.y += b.vy;
+
+    b.life--;
+
+    if (b.life <= 0) {
+      blobs.splice(i, 1);
+    }
+  }
+
+  for (let i = ripples.length - 1; i >= 0; i--) {
+    const r = ripples[i];
+
+    r.radius += r.speed;
+    r.life--;
+
+    if (r.life <= 0) {
+      ripples.splice(i, 1);
+    }
+  }
+
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const s = sparks[i];
+
+    s.x += s.vx;
+    s.y += s.vy;
+
+    s.vx *= 0.94;
+    s.vy *= 0.94;
+
+    s.life--;
+
+    if (s.life <= 0) {
+      sparks.splice(i, 1);
+    }
+  }
+}
+
+// =====================================
+// DRAW
+// =====================================
+
+function drawFluid() {
+  ctx.save();
+
+  ctx.fillStyle = "#08090c";
+  ctx.shadowColor = "rgba(0,0,0,0.25)";
+  ctx.shadowBlur = 20 + beatPulse * 18;
+
+  ctx.beginPath();
+
+  const positions = [];
+
+  for (let i = 0; i < POINTS; i++) {
+    const a = i / POINTS * TAU;
+
+    positions.push({
+      x: cx + Math.cos(a) * fluid[i].radius,
+      y: cy + Math.sin(a) * fluid[i].radius
+    });
+  }
+
+  const first = positions[0];
+  const last = positions[POINTS - 1];
+
+  ctx.moveTo(
+    (first.x + last.x) / 2,
+    (first.y + last.y) / 2
+  );
+
+  for (let i = 0; i < POINTS; i++) {
+    const p = positions[i];
+    const next = positions[(i + 1) % POINTS];
+
+    ctx.quadraticCurveTo(
+      p.x,
+      p.y,
+      (p.x + next.x) / 2,
+      (p.y + next.y) / 2
+    );
+  }
+
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawInternalParticles() {
+  ctx.fillStyle =
+    `rgba(105,112,125,${(30 + beatPulse * 45) / 255})`;
+
+  for (let i = 0; i < 1100; i++) {
+    const a = i * 2.399963229728653;
+    const nr = Math.sqrt((i + 0.5) / 1100);
+
+    const wobble =
+      smoothNoise(i * 0.03, time, 0);
+
+    const r =
+      getFluidRadius(a) *
+      (nr * 0.9 + wobble * 0.03);
+
+    const rotation =
+      a + time * 0.08 * (1 - nr);
+
+    const x = cx + Math.cos(rotation) * r;
+    const y = cy + Math.sin(rotation) * r;
+
+    ctx.beginPath();
+
+    ctx.arc(
+      x,
+      y,
+      i % 7 === 0 ? 1.1 : 0.55,
+      0,
+      TAU
+    );
+
+    ctx.fill();
+  }
+}
+
+function drawEffects() {
+  // 波紋
+  for (const r of ripples) {
+    const fade = r.life / r.maxLife;
+
+    ctx.beginPath();
+
+    ctx.strokeStyle =
+      `rgba(35,40,50,${clamp(fade * 60 * r.strength / 255, 0, 1)})`;
+
+    ctx.lineWidth = 1 + fade * 2;
+
+    ctx.arc(cx, cy, r.radius, 0, TAU);
+    ctx.stroke();
+  }
+
+  // 粒子
+  for (const p of particles) {
+    const remaining = clamp(p.life / p.maxLife, 0, 1);
+    const fade = remaining * remaining * (3 - 2 * remaining);
+
+    ctx.fillStyle = `rgba(8,9,12,${fade})`;
+
+    ctx.beginPath();
+
+    ctx.arc(
+      p.x,
+      p.y,
+      p.radius * (0.3 + fade * 0.7),
+      0,
+      TAU
+    );
+
+    ctx.fill();
+  }
+
+  // 分離した流体
+  for (const b of blobs) {
+    const remaining = clamp(b.life / b.maxLife, 0, 1);
+    const fade = remaining * remaining * (3 - 2 * remaining);
+
+    ctx.fillStyle = `rgba(8,9,12,${fade})`;
+
+    ctx.beginPath();
+
+    ctx.ellipse(
+      b.x,
+      b.y,
+      Math.max(0.1, b.radius * fade),
+      Math.max(0.1, b.radius * 0.85 * fade),
+      0,
+      0,
+      TAU
+    );
+
+    ctx.fill();
+  }
+
+  // 火花
+  for (const s of sparks) {
+    const fade = clamp(s.life / s.maxLife, 0, 1);
+
+    ctx.fillStyle =
+      `rgba(100,110,125,${fade * 150 / 255})`;
+
+    ctx.beginPath();
+
+    ctx.arc(
+      s.x,
+      s.y,
+      (1.5 + fade * 2) / 2,
+      0,
+      TAU
+    );
+
+    ctx.fill();
+  }
+}
+
+// =====================================
+// ANIMATION LOOP
+// =====================================
+
+function animate() {
+  frame++;
+
+  ctx.fillStyle = "rgba(232,229,223,0.375)";
+  ctx.fillRect(0, 0, W, H);
+
+  updateAudio();
+  updateFluid();
+  updateEffects();
+
+  drawEffects();
+  drawFluid();
+  drawInternalParticles();
+
+  if (
+    autoMode &&
+    audioSource &&
+    frame - lastModeChange > 480
+  ) {
+    setMode(Math.floor(Math.random() * 5));
+  }
+
+  requestAnimationFrame(animate);
+}
+
+// =====================================
+// MODE BUTTONS
+// =====================================
+
+function setMode(n) {
+  mode = n;
+  lastModeChange = frame;
+
+  document.querySelectorAll(".modes button").forEach(
+    button => {
+      button.classList.toggle(
+        "active",
+        Number(button.dataset.mode) === mode
+      );
+    }
+  );
+}
+
+document.querySelectorAll(".modes button").forEach(
+  button => {
+    button.addEventListener("click", () => {
+      autoMode = false;
+      document.getElementById("auto").classList.remove("active");
+
+      setMode(Number(button.dataset.mode));
+    });
+  }
+);
+
+document.getElementById("auto").addEventListener(
+  "click",
+  () => {
+    autoMode = !autoMode;
+    lastModeChange = frame;
+
+    document.getElementById("auto").classList.toggle(
+      "active",
+      autoMode
+    );
+  }
+);
+
+// =====================================
+// AUDIO SETUP
+// =====================================
+
+async function setupAudio() {
+  if (!audioContext) {
+    audioContext = new (
+      window.AudioContext ||
+      window.webkitAudioContext
+    )();
+
+    analyser = audioContext.createAnalyser();
+
+    analyser.fftSize = 4096;
+    analyser.smoothingTimeConstant = 0.35;
+
+    frequencyData = new Uint8Array(
+      analyser.frequencyBinCount
+    );
+
+    previousSpectrum = new Float32Array(
+      analyser.frequencyBinCount
+    );
+
+    outputGain = audioContext.createGain();
+
+    outputGain.gain.value = 0;
+
+    analyser.connect(outputGain);
+    outputGain.connect(audioContext.destination);
+  }
+
+  await audioContext.resume();
+}
+
+function disconnectAudio() {
+  if (audioSource) {
+    audioSource.disconnect();
+    audioSource = null;
+  }
+
+  if (audioStream) {
+    audioStream.getTracks().forEach(track => track.stop());
+    audioStream = null;
+  }
+
+  if (audioPlayer) {
+    audioPlayer.pause();
+    audioPlayer.removeAttribute("src");
+    audioPlayer = null;
+  }
+
+  if (audioURL) {
+    URL.revokeObjectURL(audioURL);
+    audioURL = null;
+  }
+
+  if (previousSpectrum) {
+    previousSpectrum.fill(0);
+  }
+
+  if (outputGain) {
+    outputGain.gain.value = 0;
+  }
+}
+
+// =====================================
+// TAB AUDIO
+// =====================================
+
+document.getElementById("capture").addEventListener(
+  "click",
+  async () => {
+    try {
+      await setupAudio();
+
+      const stream =
+        await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true
+        });
+
+      if (!stream.getAudioTracks().length) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+
+      disconnectAudio();
+
+      audioStream = stream;
+
+      audioSource =
+        audioContext.createMediaStreamSource(stream);
+
+      audioSource.connect(analyser);
+
+      outputGain.gain.value = 0;
+
+      stream.getTracks().forEach(track => {
+        track.addEventListener("ended", () => {
+          if (audioStream === stream) {
+            disconnectAudio();
+          }
+        });
+      });
+
+    } catch (error) {
+      console.error(error);
+    }
+  }
+);
+
+// =====================================
+// AUDIO FILE
+// =====================================
+
+document.getElementById("file").addEventListener(
+  "change",
+  async event => {
+    const file = event.target.files[0];
+
+    if (!file) return;
+
+    try {
+      await setupAudio();
+      disconnectAudio();
+
+      audioURL = URL.createObjectURL(file);
+
+      audioPlayer = new Audio(audioURL);
+      audioPlayer.loop = true;
+
+      audioSource =
+        audioContext.createMediaElementSource(audioPlayer);
+
+      audioSource.connect(analyser);
+
+      outputGain.gain.value = 1;
+
+      await audioPlayer.play();
+
+    } catch (error) {
+      console.error(error);
+    }
+  }
+);
+
+// =====================================
+// STOP
+// =====================================
+
+document.getElementById("stop").addEventListener(
+  "click",
+  disconnectAudio
+);
+
+// =====================================
+// START
+// =====================================
+
+resize();
+animate();
+
+</script>
+
+</body>
+</html>
